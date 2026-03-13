@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192">
+  <rect width="192" height="192" rx="24" fill="#0a0a0f"/>
+  <circle cx="96" cy="96" r="70" fill="none" stroke="#3b82f6" stroke-width="2" opacity="0.2"/>
+  <circle cx="96" cy="96" r="45" fill="none" stroke="#3b82f6" stroke-width="2" opacity="0.35"/>
+  <circle cx="96" cy="96" r="20" fill="none" stroke="#3b82f6" stroke-width="2" opacity="0.5"/>
+  <circle cx="96" cy="96" r="8" fill="#3b82f6"/>
+  <text x="96" y="170" text-anchor="middle" fill="#3b82f6" font-family="system-ui" font-size="18" font-weight="bold" opacity="0.7">RADAR</text>
+</svg>
