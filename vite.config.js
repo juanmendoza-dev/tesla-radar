@@ -14,8 +14,8 @@ export default defineConfig({
         name: 'Tesla Radar',
         short_name: 'TeslaRadar',
         description: 'Real-time police and speed trap alerts for Tesla',
-        theme_color: '#0a0a0f',
-        background_color: '#0a0a0f',
+        theme_color: '#000000',
+        background_color: '#000000',
         display: 'fullscreen',
         orientation: 'landscape',
         start_url: '/',
@@ -37,7 +37,7 @@ export default defineConfig({
         globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
         runtimeCaching: [
           {
-            urlPattern: /^https:\/\/api\.maptiler\.com\/.*/i,
+            urlPattern: /^https:\/\/tiles\.openfreemap\.org\/.*/i,
             handler: 'CacheFirst',
             options: {
               cacheName: 'map-tiles',

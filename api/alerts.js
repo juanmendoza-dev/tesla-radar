@@ -181,6 +181,48 @@ function scoreConfidence(report, allReports) {
   return Math.max(0, Math.min(100, score));
 }
 
+// ── Google Roads API speed limit ──────────────────────────────────────
+
+const GOOGLE_ROADS_KEY = process.env.GOOGLE_ROADS_API_KEY || '';
+
+async function fetchSpeedLimit(lat, lng) {
+  if (!GOOGLE_ROADS_KEY) return null;
+
+  try {
+    // Snap to nearest road first
+    const snapUrl =
+      `https://roads.googleapis.com/v1/nearestRoads` +
+      `?points=${lat},${lng}&key=${GOOGLE_ROADS_KEY}`;
+    const snapRes = await fetch(snapUrl);
+    if (!snapRes.ok) return null;
+    const snapData = await snapRes.json();
+
+    const placeId = snapData.snappedPoints?.[0]?.placeId;
+    if (!placeId) return null;
+
+    // Get speed limit for that road segment
+    const limitUrl =
+      `https://roads.googleapis.com/v1/speedLimits` +
+      `?placeId=${placeId}&key=${GOOGLE_ROADS_KEY}`;
+    const limitRes = await fetch(limitUrl);
+    if (!limitRes.ok) return null;
+    const limitData = await limitRes.json();
+
+    const limit = limitData.speedLimits?.[0];
+    if (!limit) return null;
+
+    // Convert KPH to MPH if needed
+    const speedMph =
+      limit.units === 'KPH'
+        ? Math.round(limit.speedLimit * 0.621371)
+        : limit.speedLimit;
+
+    return speedMph;
+  } catch {
+    return null;
+  }
+}
+
 // ── Main handler ─────────────────────────────────────────────────────
 
 export default async function handler(req, res) {
@@ -199,10 +241,11 @@ export default async function handler(req, res) {
 
   const bb = boundingBox(lat, lng, radius);
 
-  // Fetch in parallel
-  const [wazeAlerts, fixedCameras] = await Promise.all([
+  // Fetch all sources in parallel
+  const [wazeAlerts, fixedCameras, speedLimit] = await Promise.all([
     fetchWazeAlerts(bb),
     fetchFixedCameras(bb),
+    fetchSpeedLimit(lat, lng),
   ]);
 
   const allReports = [...wazeAlerts, ...fixedCameras];
@@ -253,7 +296,7 @@ export default async function handler(req, res) {
 
   return res.status(200).json({
     reports,
-    speed_limit: null, // Phase 2: integrate speed-limit lookup
+    speed_limit: speedLimit,
     last_updated: new Date().toISOString(),
   });
 }
