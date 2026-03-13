@@ -18,9 +18,9 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' })
   }
 
-  // Read credentials — client_id must match what frontend uses (VITE_TESLA_CLIENT_ID)
-  const clientId = process.env.VITE_TESLA_CLIENT_ID || ''
-  const clientSecret = process.env.TESLA_CLIENT_SECRET || ''
+  // Read credentials — strip hidden \r \n whitespace that Vercel copy-paste can introduce
+  const clientId = (process.env.VITE_TESLA_CLIENT_ID || '').replace(/[\r\n\s]+/g, '')
+  const clientSecret = (process.env.TESLA_CLIENT_SECRET || '').replace(/[\r\n\s]+/g, '')
 
   // Log masked credentials for verification (server logs only, never sent to frontend)
   console.log('[Tesla Auth] Credential check:', {
