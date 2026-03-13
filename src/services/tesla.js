@@ -1,19 +1,54 @@
 // Tesla Fleet API integration
-// OAuth flow + vehicle commands
+// OAuth PKCE flow + vehicle commands
+//
+// Token exchange happens server-side via /api/auth/token
+// to keep TESLA_CLIENT_SECRET safe.
 
 const TESLA_AUTH_URL = 'https://auth.tesla.com/oauth2/v3/authorize'
-const TESLA_TOKEN_URL = 'https://auth.tesla.com/oauth2/v3/token'
 const TESLA_API_URL = 'https://fleet-api.prd.na.vn.cloud.tesla.com'
 
 const CLIENT_ID = import.meta.env.VITE_TESLA_CLIENT_ID || ''
 const REDIRECT_URI = 'https://tesla-radar.vercel.app/callback'
-const SCOPES = 'openid vehicle_device_data vehicle_location vehicle_cmds'
+const SCOPES = 'openid offline_access vehicle_device_data vehicle_location vehicle_cmds'
 
 const TOKEN_KEY = 'tesla_tokens'
 
-export function startOAuthFlow() {
+// ── PKCE helpers ────────────────────────────────────────────────────
+
+function generateCodeVerifier() {
+  const array = new Uint8Array(64)
+  crypto.getRandomValues(array)
+  return base64UrlEncode(array)
+}
+
+async function generateCodeChallenge(verifier) {
+  const encoder = new TextEncoder()
+  const data = encoder.encode(verifier)
+  const digest = await crypto.subtle.digest('SHA-256', data)
+  return base64UrlEncode(new Uint8Array(digest))
+}
+
+function base64UrlEncode(buffer) {
+  let str = ''
+  for (const byte of buffer) {
+    str += String.fromCharCode(byte)
+  }
+  return btoa(str)
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '')
+}
+
+// ── OAuth flow ──────────────────────────────────────────────────────
+
+export async function startOAuthFlow() {
   const state = crypto.randomUUID()
+  const codeVerifier = generateCodeVerifier()
+  const codeChallenge = await generateCodeChallenge(codeVerifier)
+
+  // Store PKCE verifier + state for callback
   sessionStorage.setItem('oauth_state', state)
+  sessionStorage.setItem('oauth_code_verifier', codeVerifier)
 
   const params = new URLSearchParams({
     response_type: 'code',
@@ -21,34 +56,54 @@ export function startOAuthFlow() {
     redirect_uri: REDIRECT_URI,
     scope: SCOPES,
     state,
+    code_challenge: codeChallenge,
+    code_challenge_method: 'S256',
   })
 
   window.location.href = `${TESLA_AUTH_URL}?${params}`
 }
 
 export async function handleCallback(code, state) {
+  // Verify state
   const savedState = sessionStorage.getItem('oauth_state')
-  if (state !== savedState) throw new Error('State mismatch')
+  if (state !== savedState) throw new Error('State mismatch — possible CSRF attack')
 
-  const res = await fetch(TESLA_TOKEN_URL, {
+  // Retrieve PKCE verifier
+  const codeVerifier = sessionStorage.getItem('oauth_code_verifier')
+  if (!codeVerifier) throw new Error('Missing code_verifier — restart OAuth flow')
+
+  // Exchange code for tokens via server-side route (keeps client_secret safe)
+  const res = await fetch('/api/auth/token', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
       grant_type: 'authorization_code',
-      client_id: CLIENT_ID,
       code,
-      redirect_uri: REDIRECT_URI,
+      code_verifier: codeVerifier,
     }),
   })
 
-  if (!res.ok) throw new Error('Token exchange failed')
-  const tokens = await res.json()
+  const data = await res.json()
+
+  if (!res.ok) {
+    throw new Error(data.details || data.error || 'Token exchange failed')
+  }
+
+  // Store tokens
   localStorage.setItem(TOKEN_KEY, JSON.stringify({
-    ...tokens,
-    expires_at: Date.now() + tokens.expires_in * 1000,
+    access_token: data.access_token,
+    refresh_token: data.refresh_token,
+    expires_at: Date.now() + data.expires_in * 1000,
   }))
-  return tokens
+
+  // Clean up PKCE state
+  sessionStorage.removeItem('oauth_state')
+  sessionStorage.removeItem('oauth_code_verifier')
+
+  return data
 }
+
+// ── Token management ────────────────────────────────────────────────
 
 export function getTokens() {
   try {
@@ -67,9 +122,42 @@ export function logout() {
   localStorage.removeItem(TOKEN_KEY)
 }
 
-export async function teslaAPI(path, options = {}) {
+async function refreshAccessToken() {
   const tokens = getTokens()
+  if (!tokens?.refresh_token) throw new Error('No refresh token')
+
+  const res = await fetch('/api/auth/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      grant_type: 'refresh_token',
+      refresh_token: tokens.refresh_token,
+    }),
+  })
+
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.details || 'Token refresh failed')
+
+  localStorage.setItem(TOKEN_KEY, JSON.stringify({
+    access_token: data.access_token,
+    refresh_token: data.refresh_token || tokens.refresh_token,
+    expires_at: Date.now() + data.expires_in * 1000,
+  }))
+
+  return data
+}
+
+// ── Fleet API calls ─────────────────────────────────────────────────
+
+export async function teslaAPI(path, options = {}) {
+  let tokens = getTokens()
   if (!tokens) throw new Error('Not authenticated')
+
+  // Auto-refresh if token expired
+  if (tokens.expires_at < Date.now()) {
+    await refreshAccessToken()
+    tokens = getTokens()
+  }
 
   const res = await fetch(`${TESLA_API_URL}${path}`, {
     ...options,
