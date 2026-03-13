@@ -1,6 +1,6 @@
 const mapStyle = {
   version: 8,
-  name: 'Tesla Radar Dark',
+  name: 'Tesla Radar Neon',
   sources: {
     openmaptiles: {
       type: 'vector',
@@ -9,7 +9,7 @@ const mapStyle = {
   },
   glyphs: 'https://fonts.openmaptiles.org/{fontstack}/{range}.pbf',
   layers: [
-    // ── Background ──
+    // ── Pure black background ──
     {
       id: 'background',
       type: 'background',
@@ -18,18 +18,18 @@ const mapStyle = {
       },
     },
 
-    // ── Water ──
+    // ── Water (near-black) ──
     {
       id: 'water',
       type: 'fill',
       source: 'openmaptiles',
       'source-layer': 'water',
       paint: {
-        'fill-color': '#050510',
+        'fill-color': '#020208',
       },
     },
 
-    // ── Land cover (hidden — pure black land) ──
+    // ── Land cover (invisible) ──
     {
       id: 'landcover',
       type: 'fill',
@@ -41,130 +41,90 @@ const mapStyle = {
       },
     },
 
-    // ── Roads: service / track ──
+    // ── Minor roads: #003a7a at 7px ──
     {
-      id: 'road-service-track',
+      id: 'road-minor-glow',
       type: 'line',
       source: 'openmaptiles',
       'source-layer': 'transportation',
-      filter: ['in', 'class', 'service', 'track'],
-      layout: {
-        'line-cap': 'round',
-        'line-join': 'round',
-      },
+      filter: ['in', 'class', 'service', 'track', 'minor', 'tertiary'],
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
       paint: {
-        'line-color': '#061a2e',
-        'line-width': 0.5,
-        'line-opacity': 0.4,
+        'line-color': '#003a7a',
+        'line-width': 7,
+        'line-blur': 8,
+        'line-opacity': 0.06,
+      },
+    },
+    {
+      id: 'road-minor',
+      type: 'line',
+      source: 'openmaptiles',
+      'source-layer': 'transportation',
+      filter: ['in', 'class', 'service', 'track', 'minor', 'tertiary'],
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: {
+        'line-color': '#003a7a',
+        'line-width': 1,
+        'line-opacity': 0.5,
       },
     },
 
-    // ── Roads: residential / tertiary ──
+    // ── Main roads (secondary + primary): #0066cc at 12px ──
     {
-      id: 'road-residential-tertiary',
+      id: 'road-main-glow',
       type: 'line',
       source: 'openmaptiles',
       'source-layer': 'transportation',
-      filter: ['in', 'class', 'minor', 'tertiary'],
-      layout: {
-        'line-cap': 'round',
-        'line-join': 'round',
-      },
+      filter: ['in', 'class', 'secondary', 'primary'],
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
       paint: {
-        'line-color': '#0a3050',
-        'line-width': 0.8,
+        'line-color': '#0066cc',
+        'line-width': 12,
+        'line-blur': 10,
+        'line-opacity': 0.08,
+      },
+    },
+    {
+      id: 'road-main',
+      type: 'line',
+      source: 'openmaptiles',
+      'source-layer': 'transportation',
+      filter: ['in', 'class', 'secondary', 'primary'],
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: {
+        'line-color': '#0066cc',
+        'line-width': 1.8,
         'line-opacity': 0.7,
       },
     },
 
-    // ── Roads: secondary ──
+    // ── Highways (trunk + motorway): #00b4ff at 18px glow ──
     {
-      id: 'road-secondary',
+      id: 'road-highway-glow',
       type: 'line',
       source: 'openmaptiles',
       'source-layer': 'transportation',
-      filter: ['==', 'class', 'secondary'],
-      layout: {
-        'line-cap': 'round',
-        'line-join': 'round',
-      },
-      paint: {
-        'line-color': '#0a4f8a',
-        'line-width': 1.2,
-        'line-opacity': 0.8,
-      },
-    },
-
-    // ── Roads: primary ──
-    {
-      id: 'road-primary',
-      type: 'line',
-      source: 'openmaptiles',
-      'source-layer': 'transportation',
-      filter: ['==', 'class', 'primary'],
-      layout: {
-        'line-cap': 'round',
-        'line-join': 'round',
-      },
-      paint: {
-        'line-color': '#0070b0',
-        'line-width': 1.5,
-        'line-opacity': 0.85,
-      },
-    },
-
-    // ── Roads: trunk ──
-    {
-      id: 'road-trunk',
-      type: 'line',
-      source: 'openmaptiles',
-      'source-layer': 'transportation',
-      filter: ['==', 'class', 'trunk'],
-      layout: {
-        'line-cap': 'round',
-        'line-join': 'round',
-      },
-      paint: {
-        'line-color': '#0090d0',
-        'line-width': 2,
-        'line-opacity': 0.9,
-      },
-    },
-
-    // ── Roads: motorway glow (under layer) ──
-    {
-      id: 'road-motorway-glow',
-      type: 'line',
-      source: 'openmaptiles',
-      'source-layer': 'transportation',
-      filter: ['==', 'class', 'motorway'],
-      layout: {
-        'line-cap': 'round',
-        'line-join': 'round',
-      },
+      filter: ['in', 'class', 'trunk', 'motorway'],
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
       paint: {
         'line-color': '#00b4ff',
-        'line-width': 6,
-        'line-blur': 6,
+        'line-width': 18,
+        'line-blur': 14,
         'line-opacity': 0.15,
       },
     },
-
-    // ── Roads: motorway ──
     {
-      id: 'road-motorway',
+      id: 'road-highway',
       type: 'line',
       source: 'openmaptiles',
       'source-layer': 'transportation',
-      filter: ['==', 'class', 'motorway'],
-      layout: {
-        'line-cap': 'round',
-        'line-join': 'round',
-      },
+      filter: ['in', 'class', 'trunk', 'motorway'],
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
       paint: {
         'line-color': '#00b4ff',
         'line-width': 2.5,
-        'line-blur': 2,
+        'line-blur': 1,
         'line-opacity': 0.9,
       },
     },
@@ -177,13 +137,13 @@ const mapStyle = {
       'source-layer': 'boundary',
       filter: ['==', 'admin_level', 2],
       paint: {
-        'line-color': 'rgba(255,255,255,0.06)',
+        'line-color': 'rgba(255,255,255,0.04)',
         'line-width': 0.8,
         'line-dasharray': [4, 3],
       },
     },
 
-    // ── Street name labels ──
+    // ── Subtle street name labels ──
     {
       id: 'road-label',
       type: 'symbol',
@@ -198,29 +158,8 @@ const mapStyle = {
         'text-padding': 2,
       },
       paint: {
-        'text-color': 'rgba(255,255,255,0.15)',
-        'text-halo-color': 'rgba(0,0,0,0.6)',
-        'text-halo-width': 1,
-      },
-    },
-
-    // ── Place labels ──
-    {
-      id: 'place-label-city',
-      type: 'symbol',
-      source: 'openmaptiles',
-      'source-layer': 'place',
-      filter: ['==', 'class', 'city'],
-      layout: {
-        'text-field': '{name}',
-        'text-font': ['Noto Sans Regular'],
-        'text-size': 13,
-        'text-transform': 'uppercase',
-        'text-letter-spacing': 0.1,
-      },
-      paint: {
-        'text-color': 'rgba(255,255,255,0.15)',
-        'text-halo-color': 'rgba(0,0,0,0.6)',
+        'text-color': 'rgba(255,255,255,0.12)',
+        'text-halo-color': 'rgba(0,0,0,0.8)',
         'text-halo-width': 1,
       },
     },
