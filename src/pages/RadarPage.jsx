@@ -88,6 +88,7 @@ export default function RadarPage() {
         position={position}
         alerts={enrichedAlerts}
         heading={heading}
+        speed={speed}
         route={route}
       />
 
