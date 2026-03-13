@@ -21,7 +21,6 @@ export async function fetchAlerts(lat, lng, heading, radiusMiles) {
     console.log('[Tesla Radar] /api/alerts response:', {
       reports: data.reports?.length,
       speed_limit: data.speed_limit,
-      debug: data._debug,
     });
 
     // If backend returned real reports, use them
@@ -29,8 +28,7 @@ export async function fetchAlerts(lat, lng, heading, radiusMiles) {
       return data;
     }
 
-    // Backend returned 0 reports — merge with mock data so UI isn't empty
-    console.log('[Tesla Radar] No real reports, adding mock data');
+    // Backend returned 0 reports — use mock data so UI isn't empty
     return {
       reports: generateMockAlerts(lat, lng, radiusMiles),
       speed_limit: data.speed_limit,
@@ -65,6 +63,10 @@ function generateMockAlerts(lat, lng, radiusMiles) {
     const dLng = (dist / (69 * Math.cos((lat * Math.PI) / 180))) * Math.sin(angle);
 
     const age = Math.floor(Math.random() * 20);
+    const confidence = 45 + Math.floor(Math.random() * 50);
+    const labels = { 90: 'Confirmed', 70: 'Likely', 0: 'Reported' };
+    const confidence_label = confidence >= 90 ? 'Confirmed' : confidence >= 70 ? 'Likely' : 'Reported';
+
     alerts.push({
       id: `mock-${i}-${Date.now()}`,
       type: types[i % types.length],
@@ -72,7 +74,14 @@ function generateMockAlerts(lat, lng, radiusMiles) {
       lng: lng + dLng,
       distance: Math.round(dist * 100) / 100,
       bearing: Math.round((angle * 180) / Math.PI + 360) % 360,
-      confidence: 55 + Math.floor(Math.random() * 35),
+      confidence,
+      confidence_label,
+      confidence_factors: {
+        age: 10 + Math.floor(Math.random() * 15),
+        confirmations: Math.floor(Math.random() * 20),
+        cross_source: Math.floor(Math.random() * 20),
+        historical: Math.floor(Math.random() * 15),
+      },
       age,
       sources: ['mock'],
       heading_relevant: true,
