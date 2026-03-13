@@ -3,7 +3,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 export default function useGeolocation() {
   const [position, setPosition] = useState(null)
   const [speed, setSpeed] = useState(0)
-  const [heading, setHeading] = useState(0)
+  const [heading, setHeading] = useState(null)
   const [error, setError] = useState(null)
   const watchRef = useRef(null)
 
@@ -13,7 +13,7 @@ export default function useGeolocation() {
       lng: pos.coords.longitude,
     })
     setSpeed(pos.coords.speed != null ? Math.round(pos.coords.speed * 2.237) : 0) // m/s to mph
-    setHeading(pos.coords.heading || 0)
+    setHeading(pos.coords.heading != null && pos.coords.heading > 0 ? pos.coords.heading : null)
     setError(null)
   }, [])
 

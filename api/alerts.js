@@ -1,16 +1,14 @@
 // GET /api/alerts?lat=&lng=&heading=&radius=
 //
 // Aggregates alerts from:
-// 1. Waze LiveMap georss (POLICE, SPEED_TRAP, HAZARD)
+// 1. Waze LiveMap (multiple endpoint strategies)
 // 2. OSM Overpass API for fixed speed/red-light cameras (cached 1 hr)
 //
-// Confidence scoring, heading filter, proximity sort — see inline comments.
+// Confidence scoring, heading filter, proximity sort.
 
 const FIXED_CAMERA_CACHE_TTL = 60 * 60 * 1000; // 1 hour
-const MAX_REPORT_AGE_MS = 30 * 60 * 1000; // 30 minutes
-const MIN_CONFIDENCE = 40;
+const MIN_CONFIDENCE = 0; // Temporarily 0 for debugging — raise to 40 later
 
-// In-memory cache for fixed cameras (per bounding-box key)
 const cameraCache = new Map();
 
 // ── Haversine helpers ────────────────────────────────────────────────
@@ -24,7 +22,7 @@ function toDeg(rad) {
 }
 
 function haversineDistance(lat1, lng1, lat2, lng2) {
-  const R = 3958.8; // Earth radius in miles
+  const R = 3958.8;
   const dLat = toRad(lat2 - lat1);
   const dLng = toRad(lng2 - lng1);
   const a =
@@ -33,7 +31,7 @@ function haversineDistance(lat1, lng1, lat2, lng2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-function bearing(lat1, lng1, lat2, lng2) {
+function bearingCalc(lat1, lng1, lat2, lng2) {
   const dLng = toRad(lng2 - lng1);
   const y = Math.sin(dLng) * Math.cos(toRad(lat2));
   const x =
@@ -42,15 +40,13 @@ function bearing(lat1, lng1, lat2, lng2) {
   return (toDeg(Math.atan2(y, x)) + 360) % 360;
 }
 
-// Returns true if the report is roughly ahead of the user (within ±90 degrees)
 function isAhead(userHeading, bearingToReport) {
-  if (userHeading == null) return true; // no heading → include everything
+  // null or 0 heading on desktop = no heading data → include everything
+  if (userHeading == null || userHeading === 0) return true;
   let diff = Math.abs(bearingToReport - userHeading) % 360;
   if (diff > 180) diff = 360 - diff;
   return diff <= 90;
 }
-
-// ── Bounding box from center + radius ────────────────────────────────
 
 function boundingBox(lat, lng, radiusMiles) {
   const dLat = radiusMiles / 69;
@@ -63,37 +59,71 @@ function boundingBox(lat, lng, radiusMiles) {
   };
 }
 
-// ── Waze LiveMap georss ──────────────────────────────────────────────
+// ── Waze LiveMap — try multiple strategies ──────────────────────────
 
-async function fetchWazeAlerts(bb) {
-  const url =
-    `https://www.waze.com/live-map/api/georss` +
-    `?top=${bb.north}&bottom=${bb.south}&left=${bb.west}&right=${bb.east}` +
-    `&env=row&types=alerts`;
+const WAZE_HEADERS = {
+  'User-Agent':
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  Referer: 'https://www.waze.com/',
+  Accept: 'application/json, text/plain, */*',
+  'Accept-Language': 'en-US,en;q=0.9',
+};
 
-  try {
-    const res = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0',
-        Referer: 'https://www.waze.com/live-map',
-      },
-    });
-    if (!res.ok) return [];
-    const data = await res.json();
-    const alerts = data.alerts || [];
-    return alerts.map((a) => ({
-      id: a.uuid || a.id || `waze-${Date.now()}-${Math.random()}`,
-      type: mapWazeType(a.type, a.subtype),
-      lat: a.location?.y ?? a.lat,
-      lng: a.location?.x ?? a.lng,
-      reportedAt: a.pubMillis || Date.now(),
-      confirmations: a.nThumbsUp || 0,
-      description: a.street || a.description || '',
-      source: 'waze',
-    }));
-  } catch {
-    return [];
+async function fetchWazeAlerts(bb, debug) {
+  // Strategy 1: row environment
+  const urls = [
+    `https://www.waze.com/live-map/api/georss?top=${bb.north}&bottom=${bb.south}&left=${bb.west}&right=${bb.east}&env=row&types=alerts`,
+    `https://www.waze.com/row-georss/rss?top=${bb.north}&bottom=${bb.south}&left=${bb.west}&right=${bb.east}&env=row&types=alerts`,
+    `https://www.waze.com/live-map/api/georss?top=${bb.north}&bottom=${bb.south}&left=${bb.west}&right=${bb.east}&env=na&types=alerts`,
+  ];
+
+  for (const url of urls) {
+    try {
+      debug.waze_urls_tried = debug.waze_urls_tried || [];
+      debug.waze_urls_tried.push(url);
+
+      const res = await fetch(url, { headers: WAZE_HEADERS });
+      debug.waze_status = res.status;
+
+      if (!res.ok) {
+        debug.waze_error = `HTTP ${res.status}`;
+        continue;
+      }
+
+      const text = await res.text();
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        debug.waze_error = `Not JSON: ${text.slice(0, 200)}`;
+        continue;
+      }
+
+      const alerts = data.alerts || [];
+      debug.waze_raw_count = alerts.length;
+      debug.waze_url_used = url;
+
+      if (alerts.length === 0) {
+        debug.waze_note = 'Waze returned 200 but 0 alerts';
+        continue;
+      }
+
+      return alerts.map((a) => ({
+        id: a.uuid || a.id || `waze-${Date.now()}-${Math.random()}`,
+        type: mapWazeType(a.type, a.subtype),
+        lat: a.location?.y ?? a.lat,
+        lng: a.location?.x ?? a.lng,
+        reportedAt: a.pubMillis || Date.now(),
+        confirmations: a.nThumbsUp || 0,
+        description: a.street || a.description || '',
+        source: 'waze',
+      }));
+    } catch (err) {
+      debug.waze_error = err.message;
+    }
   }
+
+  return [];
 }
 
 function mapWazeType(type, subtype) {
@@ -107,10 +137,12 @@ function mapWazeType(type, subtype) {
 
 // ── OSM Overpass fixed cameras ───────────────────────────────────────
 
-async function fetchFixedCameras(bb) {
+async function fetchFixedCameras(bb, debug) {
   const cacheKey = `${bb.south.toFixed(3)},${bb.west.toFixed(3)},${bb.north.toFixed(3)},${bb.east.toFixed(3)}`;
   const cached = cameraCache.get(cacheKey);
   if (cached && Date.now() - cached.ts < FIXED_CAMERA_CACHE_TTL) {
+    debug.osm_source = 'cache';
+    debug.osm_count = cached.data.length;
     return cached.data;
   }
 
@@ -129,21 +161,28 @@ async function fetchFixedCameras(bb) {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: `data=${encodeURIComponent(query)}`,
     });
-    if (!res.ok) return cached?.data || [];
+    debug.osm_status = res.status;
+    if (!res.ok) {
+      debug.osm_error = `HTTP ${res.status}`;
+      return cached?.data || [];
+    }
     const json = await res.json();
     const cameras = (json.elements || []).map((el) => ({
       id: `osm-${el.id}`,
-      type: 'speed_camera',
+      type: 'camera',
       lat: el.lat,
       lng: el.lon,
       reportedAt: Date.now(),
-      confirmations: 10, // fixed infrastructure — high trust
+      confirmations: 10,
       description: el.tags?.description || 'Fixed speed camera',
       source: 'osm',
     }));
+    debug.osm_source = 'live';
+    debug.osm_count = cameras.length;
     cameraCache.set(cacheKey, { ts: Date.now(), data: cameras });
     return cameras;
-  } catch {
+  } catch (err) {
+    debug.osm_error = err.message;
     return cached?.data || [];
   }
 }
@@ -153,19 +192,14 @@ async function fetchFixedCameras(bb) {
 function scoreConfidence(report, allReports) {
   let score = 50;
 
-  // +20 if confirmed by 2+ users
   if (report.confirmations >= 2) score += 20;
 
   const ageMs = Date.now() - report.reportedAt;
   const ageMin = ageMs / 60000;
 
-  // +15 if reported within last 5 min
   if (ageMin <= 5) score += 15;
-
-  // -10 per 10 minutes of age
   score -= Math.floor(ageMin / 10) * 10;
 
-  // +20 if appears in 2+ sources (same type within ~0.1 mi)
   const crossSource = allReports.some(
     (other) =>
       other.id !== report.id &&
@@ -175,7 +209,6 @@ function scoreConfidence(report, allReports) {
   );
   if (crossSource) score += 20;
 
-  // Fixed cameras always get high confidence
   if (report.source === 'osm') score = Math.max(score, 85);
 
   return Math.max(0, Math.min(100, score));
@@ -185,22 +218,26 @@ function scoreConfidence(report, allReports) {
 
 const GOOGLE_ROADS_KEY = process.env.GOOGLE_ROADS_API_KEY || '';
 
-async function fetchSpeedLimit(lat, lng) {
-  if (!GOOGLE_ROADS_KEY) return null;
+async function fetchSpeedLimit(lat, lng, debug) {
+  if (!GOOGLE_ROADS_KEY) {
+    debug.speed_limit_note = 'No GOOGLE_ROADS_API_KEY';
+    return null;
+  }
 
   try {
-    // Snap to nearest road first
     const snapUrl =
       `https://roads.googleapis.com/v1/nearestRoads` +
       `?points=${lat},${lng}&key=${GOOGLE_ROADS_KEY}`;
     const snapRes = await fetch(snapUrl);
-    if (!snapRes.ok) return null;
+    if (!snapRes.ok) {
+      debug.speed_limit_error = `Snap HTTP ${snapRes.status}`;
+      return null;
+    }
     const snapData = await snapRes.json();
 
     const placeId = snapData.snappedPoints?.[0]?.placeId;
     if (!placeId) return null;
 
-    // Get speed limit for that road segment
     const limitUrl =
       `https://roads.googleapis.com/v1/speedLimits` +
       `?placeId=${placeId}&key=${GOOGLE_ROADS_KEY}`;
@@ -211,14 +248,14 @@ async function fetchSpeedLimit(lat, lng) {
     const limit = limitData.speedLimits?.[0];
     if (!limit) return null;
 
-    // Convert KPH to MPH if needed
     const speedMph =
       limit.units === 'KPH'
         ? Math.round(limit.speedLimit * 0.621371)
         : limit.speedLimit;
 
     return speedMph;
-  } catch {
+  } catch (err) {
+    debug.speed_limit_error = err.message;
     return null;
   }
 }
@@ -241,47 +278,55 @@ export default async function handler(req, res) {
 
   const bb = boundingBox(lat, lng, radius);
 
+  // Debug object included in response for troubleshooting
+  const debug = {
+    input: { lat, lng, heading, radius },
+    bounding_box: bb,
+  };
+
   // Fetch all sources in parallel
   const [wazeAlerts, fixedCameras, speedLimit] = await Promise.all([
-    fetchWazeAlerts(bb),
-    fetchFixedCameras(bb),
-    fetchSpeedLimit(lat, lng),
+    fetchWazeAlerts(bb, debug),
+    fetchFixedCameras(bb, debug),
+    fetchSpeedLimit(lat, lng, debug),
   ]);
 
   const allReports = [...wazeAlerts, ...fixedCameras];
+  debug.total_raw = allReports.length;
 
   const now = Date.now();
-  const reports = allReports
-    .map((r) => {
-      const distance = haversineDistance(lat, lng, r.lat, r.lng);
-      const bear = bearing(lat, lng, r.lat, r.lng);
-      const headingRelevant = isAhead(heading, bear);
-      const age = Math.round((now - r.reportedAt) / 60000); // minutes
-      const confidence = scoreConfidence(r, allReports);
-      return {
-        id: r.id,
-        type: r.type,
-        lat: r.lat,
-        lng: r.lng,
-        distance: Math.round(distance * 100) / 100,
-        bearing: Math.round(bear),
-        confidence,
-        age,
-        sources: [r.source],
-        heading_relevant: headingRelevant,
-        description: r.description,
-      };
-    })
-    // Filter: older than 30 min (except fixed cameras), below confidence 40, behind user
+  const mapped = allReports.map((r) => {
+    const distance = haversineDistance(lat, lng, r.lat, r.lng);
+    const bear = bearingCalc(lat, lng, r.lat, r.lng);
+    const headingRelevant = isAhead(heading, bear);
+    const age = Math.round((now - r.reportedAt) / 60000);
+    const confidence = scoreConfidence(r, allReports);
+    return {
+      id: r.id,
+      type: r.type,
+      lat: r.lat,
+      lng: r.lng,
+      distance: Math.round(distance * 100) / 100,
+      bearing: Math.round(bear),
+      confidence,
+      age,
+      sources: [r.source],
+      heading_relevant: headingRelevant,
+      description: r.description,
+    };
+  });
+
+  debug.before_filter = mapped.length;
+
+  const reports = mapped
     .filter((r) => {
-      if (r.type !== 'speed_camera' && r.age > 30) return false;
+      if (r.type !== 'camera' && r.age > 30) return false;
       if (r.confidence < MIN_CONFIDENCE) return false;
+      // Heading filter disabled when heading is 0 (desktop/stationary)
       if (!r.heading_relevant) return false;
       if (r.distance > radius) return false;
       return true;
     })
-    // Sort by weighted score: confidence*0.6 + proximity*0.4
-    // Proximity is inverted: closer = higher score
     .sort((a, b) => {
       const maxDist = radius || 5;
       const proxA = 1 - a.distance / maxDist;
@@ -291,12 +336,14 @@ export default async function handler(req, res) {
       return scoreB - scoreA;
     });
 
-  // Edge caching
+  debug.after_filter = reports.length;
+
   res.setHeader('Cache-Control', 's-maxage=30, stale-while-revalidate=10');
 
   return res.status(200).json({
     reports,
     speed_limit: speedLimit,
     last_updated: new Date().toISOString(),
+    _debug: debug,
   });
 }
