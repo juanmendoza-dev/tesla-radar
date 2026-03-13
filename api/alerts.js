@@ -4,12 +4,51 @@
 // 1. Waze LiveMap (multiple endpoint strategies)
 // 2. OSM Overpass API for fixed speed/red-light cameras (cached 1 hr)
 //
-// Confidence scoring, heading filter, proximity sort.
+// Confidence scoring v2 with 4-factor engine:
+//   - Age decay (6-tier)
+//   - Confirmation count (5-tier)
+//   - Cross-source validation
+//   - Location history (hotspot DB)
 
 const FIXED_CAMERA_CACHE_TTL = 60 * 60 * 1000; // 1 hour
-const MIN_CONFIDENCE = 0; // Temporarily 0 for debugging — raise to 40 later
+const MIN_CONFIDENCE = 40;
 
 const cameraCache = new Map();
+
+// ── Location history / hotspot cache (in-memory) ────────────────────
+// Key: rounded lat,lng (50m grid). Value: { count, timestamps[] }
+const locationHistory = new Map();
+const HISTORY_TTL = 7 * 24 * 60 * 60 * 1000; // 7 days
+const GRID_PRECISION = 4; // ~11m precision, cluster within 50m
+
+function gridKey(lat, lng) {
+  // Round to ~50m grid cells
+  const factor = Math.pow(10, GRID_PRECISION);
+  return `${Math.round(lat * factor) / factor},${Math.round(lng * factor) / factor}`;
+}
+
+function recordLocation(lat, lng) {
+  const key = gridKey(lat, lng);
+  const now = Date.now();
+  const entry = locationHistory.get(key) || { count: 0, timestamps: [] };
+
+  // Prune old timestamps
+  entry.timestamps = entry.timestamps.filter((t) => now - t < HISTORY_TTL);
+  entry.timestamps.push(now);
+  entry.count = entry.timestamps.length;
+
+  locationHistory.set(key, entry);
+}
+
+function getLocationStats(lat, lng) {
+  const key = gridKey(lat, lng);
+  const entry = locationHistory.get(key);
+  if (!entry) return { recentCount: 0, totalCount: 0 };
+
+  const now = Date.now();
+  const recentCount = entry.timestamps.filter((t) => now - t < HISTORY_TTL).length;
+  return { recentCount, totalCount: entry.count };
+}
 
 // ── Haversine helpers ────────────────────────────────────────────────
 
@@ -41,7 +80,6 @@ function bearingCalc(lat1, lng1, lat2, lng2) {
 }
 
 function isAhead(userHeading, bearingToReport) {
-  // null or 0 heading on desktop = no heading data → include everything
   if (userHeading == null || userHeading === 0) return true;
   let diff = Math.abs(bearingToReport - userHeading) % 360;
   if (diff > 180) diff = 360 - diff;
@@ -70,7 +108,6 @@ const WAZE_HEADERS = {
 };
 
 async function fetchWazeAlerts(bb, debug) {
-  // Strategy 1: row environment
   const urls = [
     `https://www.waze.com/live-map/api/georss?top=${bb.north}&bottom=${bb.south}&left=${bb.west}&right=${bb.east}&env=row&types=alerts`,
     `https://www.waze.com/row-georss/rss?top=${bb.north}&bottom=${bb.south}&left=${bb.west}&right=${bb.east}&env=row&types=alerts`,
@@ -187,31 +224,97 @@ async function fetchFixedCameras(bb, debug) {
   }
 }
 
-// ── Confidence scoring ───────────────────────────────────────────────
+// ── Confidence scoring v2 — 4-factor engine ─────────────────────────
 
 function scoreConfidence(report, allReports) {
-  let score = 50;
+  let score = 50; // base
+  const factors = { age: 0, confirmations: 0, cross_source: 0, historical: 0 };
 
-  if (report.confirmations >= 2) score += 20;
-
+  // FACTOR 1 — Age decay (6-tier)
   const ageMs = Date.now() - report.reportedAt;
   const ageMin = ageMs / 60000;
 
-  if (ageMin <= 5) score += 15;
-  score -= Math.floor(ageMin / 10) * 10;
+  if (ageMin <= 5) {
+    factors.age = 25;
+  } else if (ageMin <= 10) {
+    factors.age = 10;
+  } else if (ageMin <= 20) {
+    factors.age = 0;
+  } else if (ageMin <= 25) {
+    factors.age = -15;
+  } else if (ageMin <= 30) {
+    factors.age = -25;
+  }
+  // Over 30 min: handled by filter (remove entirely)
 
-  const crossSource = allReports.some(
-    (other) =>
-      other.id !== report.id &&
-      other.source !== report.source &&
-      other.type === report.type &&
-      haversineDistance(report.lat, report.lng, other.lat, other.lng) < 0.1
-  );
-  if (crossSource) score += 20;
+  score += factors.age;
 
+  // FACTOR 2 — Confirmation count (5-tier)
+  const conf = report.confirmations || 0;
+  if (conf >= 10) {
+    factors.confirmations = 25;
+  } else if (conf >= 7) {
+    factors.confirmations = 20;
+  } else if (conf >= 4) {
+    factors.confirmations = 15;
+  } else if (conf >= 2) {
+    factors.confirmations = 10;
+  } else {
+    factors.confirmations = 0;
+  }
+
+  score += factors.confirmations;
+
+  // FACTOR 3 — Cross-source validation
+  const sources = new Set([report.source]);
+  for (const other of allReports) {
+    if (other.id === report.id) continue;
+    if (other.type !== report.type) continue;
+    const dist = haversineDistance(report.lat, report.lng, other.lat, other.lng);
+    if (dist < 0.1) {
+      sources.add(other.source);
+    }
+  }
+
+  if (sources.size >= 3) {
+    factors.cross_source = 30; // All three sources
+  } else if (sources.has('waze') && sources.has('google')) {
+    factors.cross_source = 20; // Waze + Google Maps
+  } else if (sources.has('waze') && sources.has('osm')) {
+    factors.cross_source = 15; // Waze + OSM
+  } else {
+    factors.cross_source = 0;
+  }
+
+  score += factors.cross_source;
+
+  // FACTOR 4 — Location history
+  const stats = getLocationStats(report.lat, report.lng);
+  if (stats.totalCount >= 10) {
+    factors.historical = 20; // Known hotspot
+  } else if (stats.totalCount >= 3) {
+    factors.historical = 15; // Recurring location
+  } else if (stats.recentCount >= 1) {
+    factors.historical = 10; // Recent history
+  } else {
+    factors.historical = 0;
+  }
+
+  score += factors.historical;
+
+  // OSM cameras always high confidence
   if (report.source === 'osm') score = Math.max(score, 85);
 
-  return Math.max(0, Math.min(100, score));
+  // Clamp
+  score = Math.max(0, Math.min(100, score));
+
+  return { score, factors };
+}
+
+function confidenceLabel(score) {
+  if (score >= 90) return 'Confirmed';
+  if (score >= 70) return 'Likely';
+  return 'Reported';
 }
 
 // ── Google Roads API speed limit ──────────────────────────────────────
@@ -278,7 +381,6 @@ export default async function handler(req, res) {
 
   const bb = boundingBox(lat, lng, radius);
 
-  // Debug object included in response for troubleshooting
   const debug = {
     input: { lat, lng, heading, radius },
     bounding_box: bb,
@@ -294,13 +396,18 @@ export default async function handler(req, res) {
   const allReports = [...wazeAlerts, ...fixedCameras];
   debug.total_raw = allReports.length;
 
+  // Record locations for hotspot tracking
+  for (const r of allReports) {
+    recordLocation(r.lat, r.lng);
+  }
+
   const now = Date.now();
   const mapped = allReports.map((r) => {
     const distance = haversineDistance(lat, lng, r.lat, r.lng);
     const bear = bearingCalc(lat, lng, r.lat, r.lng);
     const headingRelevant = isAhead(heading, bear);
     const age = Math.round((now - r.reportedAt) / 60000);
-    const confidence = scoreConfidence(r, allReports);
+    const { score, factors } = scoreConfidence(r, allReports);
     return {
       id: r.id,
       type: r.type,
@@ -308,7 +415,9 @@ export default async function handler(req, res) {
       lng: r.lng,
       distance: Math.round(distance * 100) / 100,
       bearing: Math.round(bear),
-      confidence,
+      confidence: score,
+      confidence_label: confidenceLabel(score),
+      confidence_factors: factors,
       age,
       sources: [r.source],
       heading_relevant: headingRelevant,
@@ -320,9 +429,10 @@ export default async function handler(req, res) {
 
   const reports = mapped
     .filter((r) => {
+      // Over 30 min: remove entirely (except cameras)
       if (r.type !== 'camera' && r.age > 30) return false;
+      // Never show below 40 confidence
       if (r.confidence < MIN_CONFIDENCE) return false;
-      // Heading filter disabled when heading is 0 (desktop/stationary)
       if (!r.heading_relevant) return false;
       if (r.distance > radius) return false;
       return true;
