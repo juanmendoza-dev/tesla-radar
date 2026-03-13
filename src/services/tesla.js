@@ -47,9 +47,10 @@ export async function startOAuthFlow() {
   const codeVerifier = generateCodeVerifier()
   const codeChallenge = await generateCodeChallenge(codeVerifier)
 
-  // Store PKCE verifier + state for callback
-  sessionStorage.setItem('oauth_state', state)
-  sessionStorage.setItem('oauth_code_verifier', codeVerifier)
+  // Store PKCE verifier + state — use localStorage because sessionStorage
+  // gets cleared when Tesla's auth page redirects back in some browsers
+  localStorage.setItem('oauth_state', state)
+  localStorage.setItem('oauth_code_verifier', codeVerifier)
 
   const params = new URLSearchParams({
     response_type: 'code',
@@ -66,11 +67,11 @@ export async function startOAuthFlow() {
 
 export async function handleCallback(code, state) {
   // Verify state
-  const savedState = sessionStorage.getItem('oauth_state')
+  const savedState = localStorage.getItem('oauth_state')
   if (state !== savedState) throw new Error('State mismatch — possible CSRF attack')
 
   // Retrieve PKCE verifier
-  const codeVerifier = sessionStorage.getItem('oauth_code_verifier')
+  const codeVerifier = localStorage.getItem('oauth_code_verifier')
   if (!codeVerifier) throw new Error('Missing code_verifier — restart OAuth flow')
 
   // Exchange code for tokens via server-side route (keeps client_secret safe)
@@ -98,8 +99,8 @@ export async function handleCallback(code, state) {
   }))
 
   // Clean up PKCE state
-  sessionStorage.removeItem('oauth_state')
-  sessionStorage.removeItem('oauth_code_verifier')
+  localStorage.removeItem('oauth_state')
+  localStorage.removeItem('oauth_code_verifier')
 
   return data
 }
