@@ -10,6 +10,7 @@ const TESLA_API_URL = 'https://fleet-api.prd.na.vn.cloud.tesla.com'
 const CLIENT_ID = import.meta.env.VITE_TESLA_CLIENT_ID || ''
 const REDIRECT_URI = 'https://tesla-radar.vercel.app/callback'
 const SCOPES = 'openid offline_access vehicle_device_data vehicle_location vehicle_cmds'
+const AUDIENCE = 'https://fleet-api.prd.na.vn.cloud.tesla.com'
 
 const TOKEN_KEY = 'tesla_tokens'
 
