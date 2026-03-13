@@ -1,13 +1,17 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useCallback, useState } from 'react'
 import maplibregl from 'maplibre-gl'
+import mapStyle from '../styles/mapStyle.js'
+import RadarSweep from './RadarSweep.jsx'
 
 const ALERT_COLORS = {
-  police: '#ef4444',
-  speed_trap: '#eab308',
-  hazard: '#f97316',
+  police: '#ff2d2d',
+  speed_trap: '#ff8c00',
+  hazard: '#ffaa00',
   accident: '#a855f7',
-  other: '#6b7280',
-  unknown: '#6b7280',
+  camera: '#ff6b35',
+  speed_camera: '#ff6b35',
+  other: '#666666',
+  unknown: '#666666',
 }
 
 const ALERT_ICONS = {
@@ -15,40 +19,25 @@ const ALERT_ICONS = {
   speed_trap: '📸',
   hazard: '⚠️',
   accident: '💥',
+  camera: '📷',
+  speed_camera: '📷',
   other: '❗',
   unknown: '❗',
-}
-
-// Dark map style using free tiles
-const MAP_STYLE = {
-  version: 8,
-  name: 'Tesla Radar Dark',
-  sources: {
-    'osm-tiles': {
-      type: 'raster',
-      tiles: [
-        'https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
-      ],
-      tileSize: 256,
-      attribution: '&copy; OpenStreetMap &copy; CARTO',
-    },
-  },
-  layers: [
-    {
-      id: 'osm-tiles',
-      type: 'raster',
-      source: 'osm-tiles',
-      minzoom: 0,
-      maxzoom: 19,
-    },
-  ],
 }
 
 export default function RadarMap({ position, alerts, heading }) {
   const containerRef = useRef(null)
   const mapRef = useRef(null)
-  const markerRef = useRef(null)
+  const userMarkerRef = useRef(null)
   const alertMarkersRef = useRef([])
+  const [sweepCenter, setSweepCenter] = useState(null)
+
+  // Update sweep center when map moves or position changes
+  const updateSweepCenter = useCallback(() => {
+    if (!mapRef.current || !position) return
+    const point = mapRef.current.project([position.lng, position.lat])
+    setSweepCenter({ x: point.x, y: point.y })
+  }, [position])
 
   // Initialize map
   useEffect(() => {
@@ -56,14 +45,15 @@ export default function RadarMap({ position, alerts, heading }) {
 
     const map = new maplibregl.Map({
       container: containerRef.current,
-      style: MAP_STYLE,
+      style: mapStyle,
       center: position ? [position.lng, position.lat] : [-122.4194, 37.7749],
       zoom: 14,
       attributionControl: false,
       pitchWithRotate: false,
     })
 
-    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'bottom-right')
+    map.on('move', updateSweepCenter)
+    map.on('zoom', updateSweepCenter)
 
     mapRef.current = map
 
@@ -73,42 +63,40 @@ export default function RadarMap({ position, alerts, heading }) {
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Create user marker element with pulsing rings
+  const createUserMarkerElement = useCallback(() => {
+    const container = document.createElement('div')
+    container.style.cssText = 'position:relative;width:40px;height:40px;display:flex;align-items:center;justify-content:center;'
+
+    // Pulse ring 1
+    const ring1 = document.createElement('span')
+    ring1.style.cssText = 'position:absolute;width:6px;height:6px;border-radius:50%;border:2px solid #00b4ff;animation:pulse-ring 2s ease-out infinite;'
+    container.appendChild(ring1)
+
+    // Pulse ring 2 (staggered)
+    const ring2 = document.createElement('span')
+    ring2.style.cssText = 'position:absolute;width:6px;height:6px;border-radius:50%;border:2px solid #00b4ff;animation:pulse-ring 2s ease-out 1s infinite;'
+    container.appendChild(ring2)
+
+    // Core dot
+    const core = document.createElement('span')
+    core.style.cssText = 'position:relative;width:6px;height:6px;border-radius:50%;background:#fff;box-shadow:0 0 6px 2px rgba(0,180,255,0.6);z-index:1;'
+    container.appendChild(core)
+
+    return container
+  }, [])
+
   // Update user position marker
   useEffect(() => {
     if (!mapRef.current || !position) return
 
-    if (!markerRef.current) {
-      const el = document.createElement('div')
-      el.className = 'user-marker'
-      el.innerHTML = `
-        <div style="
-          width: 20px; height: 20px;
-          background: #3b82f6;
-          border: 3px solid #93c5fd;
-          border-radius: 50%;
-          box-shadow: 0 0 12px rgba(59,130,246,0.6), 0 0 24px rgba(59,130,246,0.3);
-        "></div>
-        <div class="heading-arrow" style="
-          position: absolute; top: -8px; left: 50%;
-          transform: translateX(-50%) rotate(0deg);
-          width: 0; height: 0;
-          border-left: 5px solid transparent;
-          border-right: 5px solid transparent;
-          border-bottom: 10px solid #3b82f6;
-          transform-origin: center bottom;
-        "></div>
-      `
-      markerRef.current = new maplibregl.Marker({ element: el })
+    if (!userMarkerRef.current) {
+      const el = createUserMarkerElement()
+      userMarkerRef.current = new maplibregl.Marker({ element: el })
         .setLngLat([position.lng, position.lat])
         .addTo(mapRef.current)
     } else {
-      markerRef.current.setLngLat([position.lng, position.lat])
-    }
-
-    // Update heading arrow
-    const arrow = markerRef.current.getElement().querySelector('.heading-arrow')
-    if (arrow && heading) {
-      arrow.style.transform = `translateX(-50%) rotate(${heading}deg)`
+      userMarkerRef.current.setLngLat([position.lng, position.lat])
     }
 
     // Smoothly follow user
@@ -116,7 +104,9 @@ export default function RadarMap({ position, alerts, heading }) {
       center: [position.lng, position.lat],
       duration: 1000,
     })
-  }, [position, heading])
+
+    updateSweepCenter()
+  }, [position, heading, createUserMarkerElement, updateSweepCenter])
 
   // Update alert markers
   useEffect(() => {
@@ -131,33 +121,44 @@ export default function RadarMap({ position, alerts, heading }) {
     alerts.forEach((alert) => {
       const color = ALERT_COLORS[alert.type] || ALERT_COLORS.unknown
       const icon = ALERT_ICONS[alert.type] || ALERT_ICONS.unknown
+      const isClose = alert.distance < 0.5
 
       const el = document.createElement('div')
       el.style.cssText = `
-        display: flex; align-items: center; justify-content: center;
-        width: 36px; height: 36px;
-        background: ${color}22;
-        border: 2px solid ${color};
-        border-radius: 50%;
-        font-size: 18px;
-        cursor: pointer;
-        box-shadow: 0 0 8px ${color}44;
-        transition: transform 0.2s;
+        display:flex;align-items:center;justify-content:center;
+        width:36px;height:36px;
+        background:${color}15;
+        border:1.5px solid ${color}60;
+        border-radius:50%;
+        font-size:16px;
+        cursor:pointer;
+        box-shadow:0 0 12px ${color}30;
+        animation:${isClose ? 'breathe-fast' : 'breathe'} ${isClose ? '1s' : '2.5s'} ease-in-out infinite;
       `
       el.textContent = icon
       el.title = `${alert.type} — ${alert.description} (${alert.distance} mi)`
 
+      const popupContent = `
+        <div style="font-family:var(--font-body);">
+          <div style="font-family:var(--font-heading);font-weight:600;color:${color};font-size:12px;text-transform:uppercase;letter-spacing:0.1em;">
+            ${(alert.type || '').replace('_', ' ')}
+          </div>
+          <div style="font-family:var(--font-mono);color:var(--text-secondary);font-size:11px;margin-top:4px;">
+            ${alert.description || ''}
+          </div>
+          <div style="font-family:var(--font-heading);color:var(--text-primary);font-size:14px;margin-top:6px;">
+            ${alert.distance} mi
+            <span style="font-family:var(--font-mono);color:var(--text-tertiary);font-size:10px;margin-left:6px;">
+              confidence ${alert.confidence || '—'}
+            </span>
+          </div>
+        </div>
+      `
+
       const marker = new maplibregl.Marker({ element: el })
         .setLngLat([alert.lng, alert.lat])
         .setPopup(
-          new maplibregl.Popup({ offset: 25, className: 'radar-popup' })
-            .setHTML(`
-              <div style="background:#16161f;color:#f0f0f5;padding:8px 12px;border-radius:8px;font-size:13px;">
-                <strong style="color:${color}">${alert.type.replace('_', ' ').toUpperCase()}</strong><br/>
-                ${alert.description}<br/>
-                <span style="color:#8888a0">${alert.distance} mi ${alert.direction}</span>
-              </div>
-            `)
+          new maplibregl.Popup({ offset: 25 }).setHTML(popupContent)
         )
         .addTo(mapRef.current)
 
@@ -166,6 +167,10 @@ export default function RadarMap({ position, alerts, heading }) {
   }, [alerts])
 
   return (
-    <div ref={containerRef} className="w-full h-full" />
+    <div ref={containerRef} className="w-full h-full relative">
+      {sweepCenter && (
+        <RadarSweep center={sweepCenter} radius={180} />
+      )}
+    </div>
   )
 }

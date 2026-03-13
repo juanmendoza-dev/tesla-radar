@@ -2,15 +2,19 @@
 @import "maplibre-gl/dist/maplibre-gl.css";
 
 :root {
-  --bg-primary: #0a0a0f;
-  --bg-secondary: #12121a;
-  --bg-panel: #16161f;
-  --accent: #3b82f6;
-  --accent-red: #ef4444;
-  --accent-yellow: #eab308;
-  --accent-green: #22c55e;
-  --text-primary: #f0f0f5;
-  --text-secondary: #8888a0;
+  --bg: #000000;
+  --accent: #00b4ff;
+  --danger: #ff2d2d;
+  --text-primary: rgba(255, 255, 255, 0.85);
+  --text-secondary: rgba(255, 255, 255, 0.3);
+  --text-tertiary: rgba(255, 255, 255, 0.12);
+  --panel-bg: rgba(0, 0, 0, 0.85);
+  --card-bg: rgba(255, 255, 255, 0.03);
+  --card-border: rgba(255, 255, 255, 0.06);
+
+  --font-heading: 'Rajdhani', sans-serif;
+  --font-mono: 'DM Mono', monospace;
+  --font-body: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 }
 
 * {
@@ -23,17 +27,132 @@ html, body, #root {
   width: 100%;
   height: 100%;
   overflow: hidden;
-  background: var(--bg-primary);
+  background: var(--bg);
   color: var(--text-primary);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  font-family: var(--font-body);
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-/* MapLibre overrides for dark theme */
+/* ── Keyframe animations ── */
+
+@keyframes pulse-ring {
+  0% {
+    transform: scale(1);
+    opacity: 0.6;
+  }
+  100% {
+    transform: scale(3);
+    opacity: 0;
+  }
+}
+
+@keyframes breathe {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.8;
+  }
+  50% {
+    transform: scale(1.15);
+    opacity: 1;
+  }
+}
+
+@keyframes breathe-fast {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.8;
+  }
+  50% {
+    transform: scale(1.25);
+    opacity: 1;
+  }
+}
+
+@keyframes slide-down {
+  from {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes slide-up {
+  from {
+    transform: translateY(0);
+    opacity: 1;
+  }
+  to {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+}
+
+@keyframes slide-in-right {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes red-flash {
+  0%, 100% {
+    background-color: transparent;
+  }
+  50% {
+    background-color: rgba(255, 45, 45, 0.08);
+  }
+}
+
+/* ── MapLibre overrides ── */
+
 .maplibregl-ctrl-attrib {
   display: none !important;
 }
 
 .maplibregl-ctrl-logo {
   display: none !important;
+}
+
+.maplibregl-popup .maplibregl-popup-content {
+  background: var(--panel-bg);
+  color: var(--text-primary);
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-family: var(--font-body);
+  font-size: 13px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(12px);
+}
+
+.maplibregl-popup .maplibregl-popup-tip {
+  border-top-color: var(--panel-bg);
+}
+
+.maplibregl-popup .maplibregl-popup-close-button {
+  color: var(--text-secondary);
+  font-size: 16px;
+  padding: 2px 6px;
+}
+
+.maplibregl-popup .maplibregl-popup-close-button:hover {
+  color: var(--text-primary);
+  background: transparent;
 }
